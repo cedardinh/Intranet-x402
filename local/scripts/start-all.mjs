@@ -1,4 +1,19 @@
 #!/usr/bin/env node
+/**
+ * Local one-click bootstrap for the x402 demo topology.
+ *
+ * Runtime topology started by this script:
+ * 1) anvil (local chain)
+ * 2) monitor (event sink + dashboard backend)
+ * 3) facilitator (verify/settle APIs)
+ * 4) resource server (paywalled /weather endpoint)
+ *
+ * Important runtime artifacts written to `local/runtime-logs/`:
+ * - *.pid / *.log: process lifecycle + logs
+ * - local_usdc.address: deployed token contract
+ * - mcp_client.address / payee.address / facilitator.address: role addresses
+ * - services.state.json: full startup state used by stop-all
+ */
 
 import { spawn, spawnSync } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
@@ -17,6 +32,8 @@ const statePath = path.join(runtimeDir, "services.state.json");
 const mcpConfigPath = path.join(repoDir, ".vscode", "mcp.json");
 const isWindows = process.platform === "win32";
 
+// Keep buyer/facilitator/payee as distinct roles to match the real payment flow:
+// buyer signs payment, facilitator settles on-chain, payee receives funds.
 const config = {
   host: "127.0.0.1",
   chainId: "84532",
@@ -28,6 +45,7 @@ const config = {
   },
   buyerMcpServer: "x402-official-bridge",
   facilitatorPrivateKey: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+  // Default payee is Anvil account #1; account #0 is facilitator.
   payeePrivateKey: "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
   initialMintAmount: "2000000000",
 };
@@ -50,6 +68,7 @@ function sleep(ms) {
 }
 
 function runCapture(command, commandArgs, options = {}) {
+  // Helper for commands whose stdout we need as data (addresses, deployment output, etc).
   const result = spawnSync(command, commandArgs, {
     cwd: options.cwd,
     env: { ...process.env, ...(options.env || {}) },
@@ -68,6 +87,7 @@ function runCapture(command, commandArgs, options = {}) {
 }
 
 function runInherit(command, commandArgs, options = {}) {
+  // Helper for long-running setup steps where streaming stdout/stderr is preferred.
   const result = spawnSync(command, commandArgs, {
     cwd: options.cwd,
     env: { ...process.env, ...(options.env || {}) },
@@ -81,6 +101,7 @@ function runInherit(command, commandArgs, options = {}) {
 }
 
 function ensureCommand(command, versionArgs = ["--version"]) {
+  // Early prerequisite check avoids half-started processes with opaque errors later.
   const result = spawnSync(command, versionArgs, {
     stdio: "ignore",
     shell: isWindows,
@@ -148,6 +169,8 @@ function parsePidFile(filePath) {
 }
 
 async function cleanupOldProcesses() {
+  // Best-effort cleanup by reading both persisted state and pid files so repeated demo runs
+  // are idempotent.
   const serviceNames = ["anvil", "monitor", "facilitator", "express"];
   const state = readJsonFile(statePath);
   const pids = new Map();
@@ -192,6 +215,7 @@ async function cleanupOldProcesses() {
 }
 
 function checkPortOpen(host, port, timeoutMs = 400) {
+  // Port probe used before startup and as readiness primitive after spawn.
   return new Promise(resolve => {
     let settled = false;
     const socket = net.createConnection({ host, port });
@@ -221,6 +245,7 @@ async function waitForPort(host, port, timeoutMs = 20000) {
 }
 
 async function waitForHttpStatus(url, accept, timeoutMs = 40000) {
+  // Poll health/readiness endpoints with a short request timeout so startup remains responsive.
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     const controller = new AbortController();
@@ -242,6 +267,7 @@ async function waitForHttpStatus(url, accept, timeoutMs = 40000) {
 }
 
 function startDetachedService(name, command, commandArgs, options = {}) {
+  // Spawn process in detached mode and persist pid/log path so stop-all can terminate cleanly.
   const logPath = path.join(runtimeDir, `${name}.log`);
   const logFd = openSync(logPath, "w");
   const child = spawn(command, commandArgs, {
@@ -263,6 +289,8 @@ function startDetachedService(name, command, commandArgs, options = {}) {
 }
 
 function loadBuyerPrivateKey() {
+  // Allow explicit override for automation; otherwise read from VSCode MCP config
+  // so MCP caller and startup script always use the same buyer identity.
   const fromEnv = process.env.X402_MCP_PRIVATE_KEY;
   if (typeof fromEnv === "string" && fromEnv.startsWith("0x")) {
     return fromEnv;
@@ -291,6 +319,8 @@ function normalizeAddress(address) {
 }
 
 function assertDistinctRoleAddresses(addresses) {
+  // Protect demo correctness: if roles share one address, "payment" can look like
+  // self-transfer and hide real payer -> payee movement.
   const seen = new Map();
   for (const [role, address] of Object.entries(addresses)) {
     const normalized = normalizeAddress(address);
@@ -316,6 +346,7 @@ async function ensurePortsFree() {
 }
 
 async function main() {
+  // main() is intentionally linear; each step depends on the previous one being healthy.
   mkdirSync(runtimeDir, { recursive: true });
 
   log("Checking prerequisites...");
@@ -333,6 +364,7 @@ async function main() {
   await ensurePortsFree();
 
   if (bootstrap) {
+    // Optional first-run dependency installation for both facilitator and examples workspace.
     log("Running dependency bootstrap for first-time setup...");
     runInherit("pnpm", ["install"], { cwd: path.join(repoDir, "official-x402", "e2e") });
     runInherit("pnpm", ["install"], { cwd: path.join(repoDir, "official-x402", "examples", "typescript") });
@@ -353,6 +385,7 @@ async function main() {
     config.payeePrivateKey,
   ]);
 
+  // Fail fast on role collision to keep on-chain verification semantics correct.
   assertDistinctRoleAddresses({
     buyerAddress,
     facilitatorAddress,
@@ -360,6 +393,7 @@ async function main() {
   });
 
   log("Starting anvil...");
+  // Local chain is the root dependency: token deployment and all settlement RPC calls rely on it.
   const anvil = startDetachedService("anvil", "anvil", [
     "--host",
     config.host,
@@ -374,6 +408,7 @@ async function main() {
   }
 
   log("Deploying LocalUSDC and minting to MCP buyer wallet...");
+  // Deployment + mint makes the environment self-contained (no external faucets needed).
   const evmDir = path.join(localDir, "evm");
   const deployOutput = runCapture(
     "forge",
@@ -413,6 +448,7 @@ async function main() {
   writeFileSync(path.join(runtimeDir, "facilitator.address"), facilitatorAddress, "utf8");
   writeFileSync(path.join(runtimeDir, "payee.address"), payeeAddress, "utf8");
 
+  // Start passive observer first so all downstream services can publish events from step 1.
   log("Starting monitor service...");
   const monitor = startDetachedService(
     "monitor",
@@ -429,6 +465,7 @@ async function main() {
   }
 
   log("Starting facilitator...");
+  // Facilitator is the protocol execution engine for /verify and /settle.
   const facilitator = startDetachedService(
     "facilitator",
     "pnpm",
@@ -453,6 +490,7 @@ async function main() {
   }
 
   log("Starting resource server (express)...");
+  // Resource server exposes the paid endpoint and delegates payment protocol logic to x402 middleware.
   const expressService = startDetachedService(
     "express",
     "pnpm",
@@ -464,6 +502,7 @@ async function main() {
     {
       env: {
         FACILITATOR_URL: `http://${config.host}:${config.ports.facilitator}`,
+        // payTo in PAYMENT-REQUIRED should point to payee, not facilitator.
         EVM_ADDRESS: payeeAddress,
         EVM_NETWORK: `eip155:${config.chainId}`,
         EVM_PRICE_ASSET: tokenAddress,
@@ -484,6 +523,7 @@ async function main() {
   }
 
   const state = {
+    // Persist startup state so stop-all and debugging can reconstruct exact run context.
     createdAt: new Date().toISOString(),
     config,
     addresses: {

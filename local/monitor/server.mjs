@@ -5,6 +5,13 @@ import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+/**
+ * Monitor backend is intentionally protocol-agnostic:
+ * - accepts event envelopes from MCP/resource/facilitator
+ * - persists them for replay
+ * - streams them to dashboard in realtime via SSE
+ * It never participates in verify/settle decisions.
+ */
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.MONITOR_PORT || 4399);
 const MAX_EVENTS = Number(process.env.MONITOR_MAX_EVENTS || 2000);
@@ -34,6 +41,8 @@ function normalizeEvent(input) {
   const now = new Date().toISOString();
   const event = input && typeof input === "object" ? input : {};
 
+  // Monitoring is observational only: normalize and persist whatever components emit,
+  // without affecting the payment control path.
   return {
     id: typeof event.id === "string" ? event.id : randomUUID(),
     traceId: typeof event.traceId === "string" ? event.traceId : randomUUID(),
@@ -65,6 +74,7 @@ function writeJson(res, statusCode, payload) {
 }
 
 async function readJsonBody(req) {
+  // Guard payload size to keep monitor resilient under bursty event traffic.
   return new Promise((resolve, reject) => {
     let body = "";
     req.on("data", chunk => {
@@ -96,6 +106,7 @@ function trimEvents() {
 }
 
 function broadcastSSE(event) {
+  // Fan out single event to all connected dashboards.
   const payload = `event: event\ndata: ${JSON.stringify(event)}\n\n`;
   for (const client of sseClients) {
     client.write(payload);
@@ -110,6 +121,7 @@ async function ingestEvents(raw) {
   const inputs = Array.isArray(raw) ? raw : [raw];
   const normalized = inputs.map(item => normalizeEvent(item));
   for (const event of normalized) {
+    // Single write path: memory(for UI), SSE(for realtime), disk(for replay).
     events.push(event);
     trimEvents();
     broadcastSSE(event);
@@ -119,6 +131,7 @@ async function ingestEvents(raw) {
 }
 
 function loadEventHistory() {
+  // Warm memory cache from disk so UI can render historical traces on refresh/restart.
   if (!existsSync(EVENT_LOG_FILE)) {
     return;
   }
@@ -165,6 +178,7 @@ const server = createServer(async (req, res) => {
   }
 
   if (method === "GET" && url.pathname === "/events") {
+    // Primary query API used by UI history panel; supports trace-level filtering.
     const limit = Math.max(1, Math.min(1000, Number(url.searchParams.get("limit") || 200)));
     const traceId = url.searchParams.get("traceId");
     const filtered = traceId ? events.filter(event => event.traceId === traceId) : events;
@@ -181,6 +195,7 @@ const server = createServer(async (req, res) => {
     });
 
     sseClients.add(res);
+    // Send recent snapshot first so newly opened dashboard can render state immediately.
     res.write(`event: snapshot\ndata: ${JSON.stringify(events.slice(-300))}\n\n`);
 
     const heartbeat = setInterval(() => {
@@ -197,6 +212,7 @@ const server = createServer(async (req, res) => {
 
   if (method === "POST" && (url.pathname === "/events" || url.pathname === "/events/batch")) {
     try {
+      // Accept both single object and array payloads for easier emitter integration.
       const body = await readJsonBody(req);
       const inserted = await ingestEvents(body);
       writeJson(res, 200, { inserted: inserted.length });

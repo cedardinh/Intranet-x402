@@ -18,6 +18,7 @@ if [[ -z "$TOKEN_ADDRESS" ]]; then
   exit 1
 fi
 
+# Mint demo balance to MCP buyer so the first paid request can settle immediately.
 cast send "$TOKEN_ADDRESS" "mint(address,uint256)" "$BUYER_ADDRESS" "$INITIAL_MINT" \
   --rpc-url "$RPC_URL" --private-key "$DEPLOYER_PK" >/dev/null
 

@@ -7,7 +7,7 @@ anvil --host 127.0.0.1 --port 8545 --chain-id 84532
 ### Deploy USDC and mint tokens for buyers
 
 ```bash
-export MCP_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+export MCP_PRIVATE_KEY=0x7a9749e5ce0c270da4e89c5d0ec643909ba3cca7946447b4f6041f55342803ba
 export BUYER_ADDRESS=$(cast wallet address --private-key $MCP_PRIVATE_KEY)
 BUYER_ADDRESS=$BUYER_ADDRESS bash local/evm/deploy_local_usdc.sh | tee local/runtime-logs/local_usdc.address
 
@@ -23,8 +23,8 @@ PORT=4022 EVM_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae78
 
 ```bash
 TOKEN=$(cat local/runtime-logs/local_usdc.address)
-FAC_ADDR=$(cast wallet address --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80)
-FACILITATOR_URL=http://127.0.0.1:4022 EVM_ADDRESS=$FAC_ADDR EVM_NETWORK=eip155:84532 EVM_PRICE_ASSET=$TOKEN EVM_PRICE_AMOUNT=1000 EVM_ASSET_NAME=USDC EVM_ASSET_VERSION=2 MONITOR_URL=http://127.0.0.1:4399 pnpm --dir official-x402/examples/typescript/servers/express dev
+PAYEE_ADDR=$(cast wallet address --private-key 0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d)
+FACILITATOR_URL=http://127.0.0.1:4022 EVM_ADDRESS=$PAYEE_ADDR EVM_NETWORK=eip155:84532 EVM_PRICE_ASSET=$TOKEN EVM_PRICE_AMOUNT=1000 EVM_ASSET_NAME=USDC EVM_ASSET_VERSION=2 MONITOR_URL=http://127.0.0.1:4399 pnpm --dir official-x402/examples/typescript/servers/express dev
 ```
 ### Configure mcp.json
 
@@ -41,7 +41,7 @@ FACILITATOR_URL=http://127.0.0.1:4022 EVM_ADDRESS=$FAC_ADDR EVM_NETWORK=eip155:8
         "dev"
       ],
       "env": {
-        "PRIVATE_KEY": "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+        "PRIVATE_KEY": "0x7a9749e5ce0c270da4e89c5d0ec643909ba3cca7946447b4f6041f55342803ba",
         "RESOURCE_SERVER_URL": "http://127.0.0.1:4021",
         "ENDPOINT_PATH": "/weather",
         "MONITOR_URL": "http://127.0.0.1:4399"
@@ -77,7 +77,7 @@ Formatting style:
 
 ### On-chain verification of successful transaction
 
-TX='0x605f25ee14a17984e053a9e2e25439279f4b824270b40b2559703ae41b507026'
+TX='0x38c9c7204b6e185a59656aac1b23a0887b9c48fc2b2d7fbc7f6ed10407753969'
 RPC='http://127.0.0.1:8545'
 USDC_DECIMALS=6
 TRANSFER_TOPIC='0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
@@ -143,3 +143,21 @@ if [ -n "$TVAL_HEX" ] && [ "$TVAL_HEX" != "null" ]; then
 fi
 
 rm -f "$R"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+node local/scripts/stop-all.mjs

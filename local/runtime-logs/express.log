@@ -3,3 +3,4 @@
 > tsx index.ts
 
 Server listening at http://localhost:4021
+ ELIFECYCLE  Command failed with exit code 143.

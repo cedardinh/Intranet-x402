@@ -46,7 +46,7 @@
   "x402": {
     "traceId": "...",
     "txHash": "0x...",
-    "network": "Base Sepolia",
+    "network": "Local Anvil",
     "chainId": 84532
   }
 }
@@ -56,6 +56,12 @@
 - `txHash`：结算交易哈希。
 - `network`：人类可读链名（不再暴露 `eip155:...`）。
 - `chainId`：数值链 ID，便于程序侧使用。
+
+## 角色地址约定（关键改造）
+- `buyer`（MCP 私钥）负责生成 `PAYMENT-SIGNATURE`。
+- `facilitator` 负责链上 `verify/settle` 执行。
+- `payee` 作为 `payTo` 收款地址。
+- 三者必须不同地址，否则链上转账会出现 `from=to`，演示语义失真。
 
 ## 与 x402 流程的一致性
 项目严格遵循 x402 的核心事务顺序：  
