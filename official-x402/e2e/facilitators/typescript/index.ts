@@ -6,6 +6,12 @@
  * 2. 基于 x402 SDK 执行支付验签与链上结算。
  * 3. 通过生命周期 Hook 约束 verify -> settle 的顺序。
  * 4. 输出监控事件，支持按 traceId 还原完整调用链路。
+ *
+ * Core responsibilities:
+ * 1. Expose HTTP APIs for /verify and /settle.
+ * 2. Execute payment verification and on-chain settlement via x402 SDK.
+ * 3. Enforce verify -> settle ordering with lifecycle hooks.
+ * 4. Emit monitor events and reconstruct full flow by traceId.
  */
 
 import { Account, Ed25519PrivateKey, PrivateKey, PrivateKeyVariants } from "@aptos-labs/ts-sdk";
@@ -49,6 +55,8 @@ dotenv.config();
 // 运行时配置（环境变量）
 // ---------------------------
 // EVM_NETWORK 同时决定：协议注册网络 + viem 链客户端配置。
+// Runtime configuration (environment variables).
+// EVM_NETWORK controls both protocol registration and viem chain selection.
 const PORT = process.env.PORT || "4022";
 const EVM_NETWORK = process.env.EVM_NETWORK || "eip155:84532";
 const SVM_NETWORK = process.env.SVM_NETWORK || "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
@@ -63,11 +71,14 @@ const EVM_NATIVE_CURRENCY_SYMBOL = process.env.EVM_NATIVE_CURRENCY_SYMBOL || "ET
 
 /**
  * 解析 CAIP-2 EVM 网络字符串。
+ * Parses a CAIP-2 EVM network string.
+ *
  * @param network 例如 "eip155:84532"
  * @returns chainId；解析失败返回 null
  */
 function parseEvmChainId(network: string): number | null {
   // 解析 CAIP-2 样式网络 id，例如 "eip155:84532" -> 84532。
+  // Parse CAIP-2 network ID, e.g. "eip155:84532" -> 84532.
   const matched = /^eip155:(\d+)$/.exec(network);
   if (!matched) {
     return null;
@@ -79,6 +90,8 @@ function parseEvmChainId(network: string): number | null {
 /**
  * 为自定义 EVM 网络构造 viem Chain 对象。
  * 该函数用于本地链/私链场景，不依赖 viem 内置公共网络定义。
+ * Builds a viem Chain object for custom EVM networks.
+ * Used for local/private chains without relying on built-in public chain presets.
  *
  * @param network CAIP-2 网络标识
  * @throws 当 network 非法或缺少 EVM_RPC_URL 时抛错
@@ -95,6 +108,7 @@ function createCustomEvmChain(network: string): Chain {
   return defineChain({
     id: chainId,
     // 本地/私链场景下链名可配置，避免固定公网命名造成误导。
+    // Allow configurable names for local/private chains to avoid public-chain confusion.
     name: EVM_CHAIN_NAME || `EVM Chain ${chainId}`,
     network: `eip155-${chainId}`,
     nativeCurrency: {
@@ -104,6 +118,7 @@ function createCustomEvmChain(network: string): Chain {
     },
     rpcUrls: {
       // default/public 都使用同一 RPC，确保私链行为一致可控。
+      // Use the same RPC for both default/public to keep private-chain behavior deterministic.
       default: { http: [EVM_RPC_URL] },
       public: { http: [EVM_RPC_URL] },
     },
@@ -114,6 +129,10 @@ function createCustomEvmChain(network: string): Chain {
  * 根据网络标识返回 viem Chain。
  * - 已知公共链使用内置定义
  * - 其余网络走自定义链构造逻辑
+ *
+ * Resolves a viem Chain from network ID.
+ * - Known public networks use built-in definitions.
+ * - Other networks fall back to custom chain construction.
  */
 function getEvmChain(network: string): Chain {
   switch (network) {
@@ -123,6 +142,7 @@ function getEvmChain(network: string): Chain {
       return baseSepolia;
     default:
       // 项目改造点：支持任意 eip155:<chainId>，而不仅是固定公网链。
+      // Project customization: support any eip155:<chainId>, not only fixed public chains.
       return createCustomEvmChain(network);
   }
 }
@@ -135,6 +155,7 @@ if (SVM_RPC_URL) console.log(`🌐 SVM RPC URL: ${SVM_RPC_URL}`);
 if (APTOS_RPC_URL) console.log(`🌐 Aptos RPC URL: ${APTOS_RPC_URL}`);
 
 // 必需环境变量校验（facilitator 至少要有 EVM 侧签名能力）
+// Required env validation (facilitator must have at least EVM signing capability).
 if (!process.env.EVM_PRIVATE_KEY) {
   console.error("❌ EVM_PRIVATE_KEY environment variable is required");
   process.exit(1);
@@ -145,10 +166,13 @@ if (!process.env.EVM_PRIVATE_KEY) {
 // 账户与签名器初始化
 // ---------------------------
 // 1) EVM 账户
+// Account and signer initialization.
+// 1) EVM account.
 const evmAccount = privateKeyToAccount(process.env.EVM_PRIVATE_KEY as `0x${string}`);
 console.info(`EVM Facilitator account: ${evmAccount.address}`);
 
 // 2) SVM 账户（可选）
+// 2) Optional SVM account.
 const svmPrivateKey = process.env.SVM_PRIVATE_KEY;
 const svmAccount = svmPrivateKey
   ? await createKeyPairSignerFromBytes(base58.decode(svmPrivateKey))
@@ -160,6 +184,7 @@ if (svmAccount) {
 }
 
 // 3) Aptos 账户（可选，且会先按 AIP-80 规范化私钥）
+// 3) Optional Aptos account (private key normalized to AIP-80 first).
 let aptosAccount: Account | undefined;
 if (process.env.APTOS_PRIVATE_KEY) {
   const formattedAptosKey = PrivateKey.formatPrivateKey(process.env.APTOS_PRIVATE_KEY as string, PrivateKeyVariants.Ed25519);
@@ -170,6 +195,8 @@ if (process.env.APTOS_PRIVATE_KEY) {
 
 // 创建 viem 客户端（同时具备 wallet + public 能力）
 // 该客户端承担 EVM 侧所有动作：读合约、验签、写合约、等待回执等。
+// Create viem client (wallet + public actions).
+// It covers all EVM operations: read, signature verify, write, and receipt waiting.
 const evmChain = getEvmChain(EVM_NETWORK);
 const viemClient = createWalletClient({
   account: evmAccount,
@@ -178,6 +205,7 @@ const viemClient = createWalletClient({
 }).extend(publicActions);
 
 // 将 viem 客户端能力适配为 x402 Facilitator 所需的 EVM signer 接口。
+// Adapt viem capabilities into the EVM signer interface required by x402 Facilitator.
 const evmSigner = toFacilitatorEvmSigner({
   address: evmAccount.address,
   readContract: (args: {
@@ -216,27 +244,36 @@ const evmSigner = toFacilitatorEvmSigner({
 });
 
 // SVM signer：如果提供自定义 RPC，会用于默认网络访问。
+// SVM signer: if custom RPC is set, use it as default network RPC.
 const svmSigner = svmAccount
   ? toFacilitatorSvmSigner(svmAccount, SVM_RPC_URL ? { defaultRpcUrl: SVM_RPC_URL } : undefined)
   : undefined;
 
 // Aptos signer：同样支持可选自定义 RPC。
+// Aptos signer: also supports optional custom RPC.
 const aptosSigner = aptosAccount ? toFacilitatorAptosSigner(aptosAccount, APTOS_RPC_URL ? { defaultRpcUrl: APTOS_RPC_URL } : undefined) : undefined;
 
 // verify 阶段通过的 paymentPayload 哈希缓存：key=paymentHash, value=verify 时间戳（毫秒）。
 // 用于 settle 阶段执行“必须先 verify”与“verify 结果有效期”校验。
+// Cache for payload hashes that passed verify: key=paymentHash, value=verify timestamp(ms).
+// Used by settle stage to enforce "verify first" and verification TTL.
 const verifiedPayments = new Map<string, number>();
 // bazaar 资源目录缓存：用于对外暴露 discovery/resources 查询接口。
+// Bazaar resource catalog cache, exposed via discovery/resources endpoint.
 const bazaarCatalog = new BazaarCatalog();
 
 /**
  * 为一次 paymentPayload 生成稳定哈希，用于跨接口关联。
  * 典型用途：/verify 阶段记录，/settle 阶段校验是否已验证过。
+ * Generates a stable hash for one paymentPayload to correlate across APIs.
+ * Typical use: record in /verify and validate precondition in /settle.
+ *
  * @param paymentPayload 客户端提交的支付载荷
  * @returns SHA-256 十六进制字符串（同一 payload 生成同一哈希）
  */
 function createPaymentHash(paymentPayload: PaymentPayload): string {
   // 为 verify/settle 两阶段提供同一“支付身份”。
+  // Provide the same "payment identity" for both verify and settle phases.
   return crypto
     .createHash("sha256")
     .update(JSON.stringify(paymentPayload))
@@ -245,6 +282,8 @@ function createPaymentHash(paymentPayload: PaymentPayload): string {
 
 /**
  * 发送 facilitator 侧监控事件。
+ * Sends monitor events from facilitator side.
+ *
  * @param event 事件对象（会附加 component=facilitator）
  * @returns Promise<void>；失败不影响协议执行
  */
@@ -263,12 +302,16 @@ async function emitMonitorEvent(event: Record<string, unknown>): Promise<void> {
     });
   } catch {
     // 监控失败不应影响 verify/settle API 可用性。
+    // Monitor failures must never impact verify/settle API availability.
   }
 }
 
 /**
  * 从 paymentPayload.resource.url 中提取 traceId（兜底路径）。
  * 当 header/query 丢失时，仍可在 facilitator 端关联同一调用链路。
+ * Extracts traceId from paymentPayload.resource.url as fallback.
+ * Keeps trace correlation robust when header/query traceId is missing.
+ *
  * @param resourceUrl 支付载荷中声明的资源 URL
  * @returns 提取到的 traceId；提取失败返回 undefined
  */
@@ -284,6 +327,7 @@ function parseTraceIdFromResourceUrl(resourceUrl: string | undefined): string | 
     }
   } catch {
     // 忽略非法 URL，继续走其他 traceId 解析路径。
+    // Ignore malformed URLs and continue with other traceId resolution paths.
   }
   return undefined;
 }
@@ -293,12 +337,19 @@ function parseTraceIdFromResourceUrl(resourceUrl: string | undefined): string | 
  * 1) x-trace-id header
  * 2) query.traceId
  * 3) paymentPayload.resource.url 内嵌 traceId
+ *
+ * Unified traceId resolution order:
+ * 1) x-trace-id header
+ * 2) query.traceId
+ * 3) embedded traceId in paymentPayload.resource.url
+ *
  * @param req Express 请求对象
  * @param paymentPayload 可选支付载荷（用于兜底解析 resource.url）
  * @returns traceId；若所有来源都不存在则返回 undefined
  */
 function resolveTraceId(req: Request, paymentPayload?: PaymentPayload): string | undefined {
   // 保证 trace 在跨组件调用中具备鲁棒性：header -> query -> resourceUrl。
+  // Keep cross-component trace robust via fallback chain: header -> query -> resourceUrl.
   const fromHeader = req.header("x-trace-id");
   if (typeof fromHeader === "string" && fromHeader.length > 0) {
     return fromHeader;
@@ -317,6 +368,9 @@ const facilitator = new x402Facilitator();
 // 注册协议方案：
 // - v2: 使用 CAIP-2 network（如 eip155:84532）
 // - v1: 兼容旧网络枚举
+// Register payment schemes:
+// - v2 uses CAIP-2 network strings (e.g. eip155:84532)
+// - v1 keeps backward compatibility with legacy network enums
 facilitator
   .register(EVM_NETWORK as Network, new ExactEvmScheme(evmSigner))
   .registerV1(EVM_V1_NETWORKS as Network[], new ExactEvmSchemeV1(evmSigner));
@@ -333,6 +387,10 @@ if (aptosSigner) {
  * ERC20 授权 Gas 代付扩展配置：
  * - 复用现成扩展模板。
  * - 注入 sendRawTransaction 能力，供扩展在特定流程下发送原始交易。
+ *
+ * ERC20 approval gas-sponsoring extension setup:
+ * - Reuse the existing extension template.
+ * - Inject sendRawTransaction for extension paths that require raw tx broadcast.
  */
 const erc20GasSponsorshipExtension: Erc20ApprovalGasSponsoringFacilitatorExtension = {
   ...ERC20_APPROVAL_GAS_SPONSORING,
@@ -347,6 +405,10 @@ const erc20GasSponsorshipExtension: Erc20ApprovalGasSponsoringFacilitatorExtensi
 // 1) onAfterVerify：记录“已验证支付”，供 settle 前置校验使用
 // 2) onBeforeSettle：强制 verify -> settle 顺序 + 超时控制
 // 3) onAfterSettle/onSettleFailure：统一清理状态，避免内存残留
+// Extensions and lifecycle hooks:
+// 1) onAfterVerify: record verified payments for settle precondition checks
+// 2) onBeforeSettle: enforce verify -> settle ordering and timeout
+// 3) onAfterSettle/onSettleFailure: unified cleanup to avoid stale in-memory state
 facilitator.registerExtension(BAZAAR)
   .registerExtension(EIP2612_GAS_SPONSORING)
   .registerExtension(erc20GasSponsorshipExtension)
@@ -354,14 +416,20 @@ facilitator.registerExtension(BAZAAR)
    * onAfterVerify 钩子：
    * - 仅当 verify 通过时记录支付哈希。
    * - 同步提取 discovery 信息并写入目录，供后续查询。
+   *
+   * onAfterVerify hook:
+   * - Record payment hash only when verify succeeds.
+   * - Extract discovery info and store it into catalog for later querying.
    */
   .onAfterVerify(async (context) => {
     // 钩子 1：记录 verify 成功的支付哈希，作为 settle 阶段准入条件。
+    // Hook 1: track verified payment hashes as settle-stage admission precondition.
     if (context.result.isValid) {
       const paymentHash = createPaymentHash(context.paymentPayload);
       verifiedPayments.set(paymentHash, Date.now());
 
       // 钩子 2：提取并记录 bazaar discovery 信息（便于资源发现）。
+      // Hook 2: extract and catalog bazaar discovery information.
       const discovered = extractDiscoveryInfo(context.paymentPayload, context.requirements);
       if (discovered) {
         bazaarCatalog.catalogResource(
@@ -379,9 +447,14 @@ facilitator.registerExtension(BAZAAR)
    * onBeforeSettle 钩子：
    * - 强制“先 verify 再 settle”。
    * - verify 通过超过 5 分钟则拒绝，避免历史签名长期复用。
+   *
+   * onBeforeSettle hook:
+   * - Enforce "verify before settle".
+   * - Reject if verification is older than 5 minutes to avoid stale authorization reuse.
    */
   .onBeforeSettle(async (context) => {
     // 钩子 3：settle 前校验该支付是否已 verify，确保协议时序。
+    // Hook 3: ensure payment has been verified before settlement.
     const paymentHash = createPaymentHash(context.paymentPayload);
     const verificationTimestamp = verifiedPayments.get(paymentHash);
 
@@ -393,6 +466,7 @@ facilitator.registerExtension(BAZAAR)
     }
 
     // verify 结果设置 5 分钟有效期，避免旧授权被长时间滥用。
+    // Verification result has a 5-minute TTL to reduce replay/stale-authorization risk.
     const age = Date.now() - verificationTimestamp;
     if (age > 5 * 60 * 1000) {
       verifiedPayments.delete(paymentHash);
@@ -405,9 +479,13 @@ facilitator.registerExtension(BAZAAR)
   /**
    * onAfterSettle 钩子：
    * - settle 完成后立刻清理 verify 缓存，避免重复消费。
+   *
+   * onAfterSettle hook:
+   * - Clear verify cache immediately after settle to prevent repeated consumption.
    */
   .onAfterSettle(async (context) => {
     // 钩子 4：settle 成功后清理哈希记录，防止重复使用。
+    // Hook 4: clear hash record after successful settle to prevent reuse.
     const paymentHash = createPaymentHash(context.paymentPayload);
     verifiedPayments.delete(paymentHash);
 
@@ -418,9 +496,13 @@ facilitator.registerExtension(BAZAAR)
   /**
    * onSettleFailure 钩子：
    * - settle 抛错时同样清理缓存，保证状态一致性。
+   *
+   * onSettleFailure hook:
+   * - Also clear cache when settle fails, keeping state consistent.
    */
   .onSettleFailure(async (context) => {
     // 钩子 5：settle 失败时同样清理，保持状态一致性。
+    // Hook 5: perform the same cleanup on settle failure.
     const paymentHash = createPaymentHash(context.paymentPayload);
     verifiedPayments.delete(paymentHash);
 
@@ -428,22 +510,33 @@ facilitator.registerExtension(BAZAAR)
   });
 
 // 初始化 HTTP 应用
+// Initialize HTTP app.
 const app = express();
+// 解析 JSON 请求体，供 /verify 和 /settle 读取 paymentPayload/paymentRequirements。
+// Parse JSON request bodies for /verify and /settle payment payload handling.
 app.use(express.json());
 
 /**
  * POST /verify
  * 功能：校验 paymentPayload 是否满足 paymentRequirements。
+ * Purpose: validate whether paymentPayload satisfies paymentRequirements.
  *
  * 请求体：
  * - paymentPayload: 客户端签名后的支付载荷
  * - paymentRequirements: 服务端原始支付要求
+ * Request body:
+ * - paymentPayload: client-signed payment payload
+ * - paymentRequirements: original payment requirements from server
  *
  * 返回：
  * - VerifyResponse（isValid/invalidReason 等）
+ * Returns:
+ * - VerifyResponse (isValid/invalidReason, etc.)
  *
  * 说明：
  * - 支付跟踪与 discovery 目录化由 onAfterVerify hook 自动完成。
+ * Notes:
+ * - Payment tracking and discovery cataloging are handled by onAfterVerify hook.
  */
 app.post("/verify", async (req, res) => {
   try {
@@ -472,6 +565,9 @@ app.post("/verify", async (req, res) => {
     // Hook 会自动执行：
     // - 记录已验证支付
     // - 提取/入库 discovery 信息
+    // Hooks run automatically:
+    // - record verified payment
+    // - extract/store discovery info
     const response: VerifyResponse = await facilitator.verify(
       paymentPayload,
       paymentRequirements,
@@ -507,16 +603,24 @@ app.post("/verify", async (req, res) => {
 /**
  * POST /settle
  * 功能：执行链上结算。
+ * Purpose: execute on-chain settlement.
  *
  * 请求体：
+ * - paymentPayload
+ * - paymentRequirements
+ * Request body:
  * - paymentPayload
  * - paymentRequirements
  *
  * 返回：
  * - SettleResponse（success/transaction/errorReason 等）
+ * Returns:
+ * - SettleResponse (success/transaction/errorReason, etc.)
  *
  * 说明：
  * - 是否允许 settle、是否过期、以及后置清理由 hook 自动处理。
+ * Notes:
+ * - settle eligibility, expiry checks, and post-cleanup are handled by hooks.
  */
 app.post("/settle", async (req, res) => {
   try {
@@ -548,6 +652,10 @@ app.post("/settle", async (req, res) => {
     // - settle 前 verify 状态校验（未校验则中止）
     // - verify 超时校验
     // - 成功/失败后状态清理
+    // Hooks run automatically:
+    // - pre-settle verify-state check (abort if missing)
+    // - verification TTL check
+    // - cleanup after success/failure
     const response: SettleResponse = await facilitator.settle(
       typedPayload,
       typedRequirements,
@@ -577,8 +685,10 @@ app.post("/settle", async (req, res) => {
     }
 
     // 若异常来自 hook 主动中止，则返回结构化 SettleResponse（而不是 500）
+    // If aborted by hook, return structured SettleResponse instead of HTTP 500.
     if (error instanceof Error && error.message.includes("Settlement aborted:")) {
       // 这样上游 resource server 可以稳定按协议失败语义处理。
+      // This allows upstream resource server to handle protocol-level failure deterministically.
       return res.json({
         success: false,
         errorReason: error.message.replace("Settlement aborted: ", ""),
@@ -595,6 +705,7 @@ app.post("/settle", async (req, res) => {
 /**
  * GET /supported
  * 功能：返回当前 facilitator 支持的支付种类、网络与扩展能力。
+ * Returns currently supported payment kinds, networks, and extensions.
  */
 app.get("/supported", async (req, res) => {
   try {
@@ -611,10 +722,14 @@ app.get("/supported", async (req, res) => {
 /**
  * GET /discovery/resources
  * 功能：分页读取 facilitator 在 verify 阶段归档的资源发现信息。
+ * Reads discovery resources archived during verify, with pagination.
  *
  * 查询参数：
  * - limit: 返回条数，默认 100
  * - offset: 起始偏移，默认 0
+ * Query parameters:
+ * - limit: number of records, default 100
+ * - offset: pagination offset, default 0
  */
 app.get("/discovery/resources", (req, res) => {
   try {
@@ -634,6 +749,7 @@ app.get("/discovery/resources", (req, res) => {
 /**
  * GET /health
  * 功能：健康检查 + 运行时配置摘要。
+ * Health check plus runtime configuration summary.
  */
 app.get("/health", (req, res) => {
   res.json({
@@ -651,12 +767,14 @@ app.get("/health", (req, res) => {
 /**
  * POST /close
  * 功能：优雅退出（先返回响应，再短延时结束进程）。
+ * Graceful shutdown (respond first, then exit after a short delay).
  */
 app.post("/close", (req, res) => {
   res.json({ message: "Facilitator shutting down gracefully" });
   console.log("Received shutdown request");
 
   // 预留极短时间确保响应先返回给调用方，再退出进程。
+  // Keep a short delay to ensure response is flushed before process exit.
   setTimeout(() => {
     process.exit(0);
   }, 100);
@@ -665,6 +783,7 @@ app.post("/close", (req, res) => {
 /**
  * 启动 facilitator HTTP 服务。
  * 启动后打印关键运行参数与所有对外接口，便于演示时快速核对环境。
+ * Starts facilitator HTTP service and prints runtime/endpoints for quick demo validation.
  */
 app.listen(parseInt(PORT), () => {
   console.log(`
@@ -690,5 +809,6 @@ app.listen(parseInt(PORT), () => {
   `);
 
   // 该日志用于 e2e 场景判断 facilitator 已可用。
+  // This log is used by e2e scripts to detect facilitator readiness.
   console.log("Facilitator listening");
 });
