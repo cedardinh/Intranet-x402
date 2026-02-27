@@ -5,13 +5,11 @@
  * 1. 暴露 /verify 与 /settle HTTP 接口。
  * 2. 基于 x402 SDK 执行支付验签与链上结算。
  * 3. 通过生命周期 Hook 约束 verify -> settle 的顺序。
- * 4. 输出监控事件，支持按 traceId 还原完整调用链路。
  *
  * Core responsibilities:
  * 1. Expose HTTP APIs for /verify and /settle.
  * 2. Execute payment verification and on-chain settlement via x402 SDK.
  * 3. Enforce verify -> settle ordering with lifecycle hooks.
- * 4. Emit monitor events and reconstruct full flow by traceId.
  */
 
 import { Account, Ed25519PrivateKey, PrivateKey, PrivateKeyVariants } from "@aptos-labs/ts-sdk";
@@ -43,7 +41,7 @@ import { ExactSvmSchemeV1 } from "@x402/svm/exact/v1/facilitator";
 import { NETWORKS as SVM_V1_NETWORKS } from "@x402/svm/v1";
 import crypto from "crypto";
 import dotenv from "dotenv";
-import express, { Request } from "express";
+import express from "express";
 import { createWalletClient, defineChain, http, publicActions, Chain } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { baseSepolia, base } from "viem/chains";
@@ -64,7 +62,6 @@ const APTOS_NETWORK = process.env.APTOS_NETWORK || "aptos:2";
 const EVM_RPC_URL = process.env.EVM_RPC_URL;
 const SVM_RPC_URL = process.env.SVM_RPC_URL;
 const APTOS_RPC_URL = process.env.APTOS_RPC_URL;
-const MONITOR_URL = process.env.MONITOR_URL;
 const EVM_CHAIN_NAME = process.env.EVM_CHAIN_NAME;
 const EVM_NATIVE_CURRENCY_NAME = process.env.EVM_NATIVE_CURRENCY_NAME || "Ether";
 const EVM_NATIVE_CURRENCY_SYMBOL = process.env.EVM_NATIVE_CURRENCY_SYMBOL || "ETH";
@@ -280,89 +277,6 @@ function createPaymentHash(paymentPayload: PaymentPayload): string {
     .digest("hex");
 }
 
-/**
- * 发送 facilitator 侧监控事件。
- * Sends monitor events from facilitator side.
- *
- * @param event 事件对象（会附加 component=facilitator）
- * @returns Promise<void>；失败不影响协议执行
- */
-async function emitMonitorEvent(event: Record<string, unknown>): Promise<void> {
-  if (!MONITOR_URL) {
-    return;
-  }
-  try {
-    await fetch(`${MONITOR_URL.replace(/\/$/, "")}/events`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        component: "facilitator",
-        ...event,
-      }),
-    });
-  } catch {
-    // 监控失败不应影响 verify/settle API 可用性。
-    // Monitor failures must never impact verify/settle API availability.
-  }
-}
-
-/**
- * 从 paymentPayload.resource.url 中提取 traceId（兜底路径）。
- * 当 header/query 丢失时，仍可在 facilitator 端关联同一调用链路。
- * Extracts traceId from paymentPayload.resource.url as fallback.
- * Keeps trace correlation robust when header/query traceId is missing.
- *
- * @param resourceUrl 支付载荷中声明的资源 URL
- * @returns 提取到的 traceId；提取失败返回 undefined
- */
-function parseTraceIdFromResourceUrl(resourceUrl: string | undefined): string | undefined {
-  if (!resourceUrl) {
-    return undefined;
-  }
-  try {
-    const parsed = new URL(resourceUrl, "http://127.0.0.1");
-    const traceId = parsed.searchParams.get("traceId");
-    if (traceId && traceId.length > 0) {
-      return traceId;
-    }
-  } catch {
-    // 忽略非法 URL，继续走其他 traceId 解析路径。
-    // Ignore malformed URLs and continue with other traceId resolution paths.
-  }
-  return undefined;
-}
-
-/**
- * 统一 traceId 解析策略（按优先级）：
- * 1) x-trace-id header
- * 2) query.traceId
- * 3) paymentPayload.resource.url 内嵌 traceId
- *
- * Unified traceId resolution order:
- * 1) x-trace-id header
- * 2) query.traceId
- * 3) embedded traceId in paymentPayload.resource.url
- *
- * @param req Express 请求对象
- * @param paymentPayload 可选支付载荷（用于兜底解析 resource.url）
- * @returns traceId；若所有来源都不存在则返回 undefined
- */
-function resolveTraceId(req: Request, paymentPayload?: PaymentPayload): string | undefined {
-  // 保证 trace 在跨组件调用中具备鲁棒性：header -> query -> resourceUrl。
-  // Keep cross-component trace robust via fallback chain: header -> query -> resourceUrl.
-  const fromHeader = req.header("x-trace-id");
-  if (typeof fromHeader === "string" && fromHeader.length > 0) {
-    return fromHeader;
-  }
-  const fromQuery = req.query.traceId;
-  if (typeof fromQuery === "string" && fromQuery.length > 0) {
-    return fromQuery;
-  }
-  return parseTraceIdFromResourceUrl(
-    typeof paymentPayload?.resource?.url === "string" ? paymentPayload.resource.url : undefined,
-  );
-}
-
 const facilitator = new x402Facilitator();
 
 // 注册协议方案：
@@ -548,20 +462,6 @@ app.post("/verify", async (req, res) => {
       });
     }
 
-    const traceId = resolveTraceId(req, paymentPayload);
-    if (traceId) {
-      void emitMonitorEvent({
-        traceId,
-        step: "x402.facilitator.verify.requested",
-        status: "started",
-        network: paymentRequirements.network,
-        scheme: paymentRequirements.scheme,
-        asset: paymentRequirements.asset,
-        amount: paymentRequirements.amount,
-        payTo: paymentRequirements.payTo,
-      });
-    }
-
     // Hook 会自动执行：
     // - 记录已验证支付
     // - 提取/入库 discovery 信息
@@ -573,27 +473,9 @@ app.post("/verify", async (req, res) => {
       paymentRequirements,
     );
 
-    if (traceId) {
-      void emitMonitorEvent({
-        traceId,
-        step: "x402.facilitator.verify.succeeded",
-        status: response.isValid ? "success" : "fail",
-        errorReason: response.isValid ? undefined : response.invalidReason,
-      });
-    }
-
     res.json(response);
   } catch (error) {
     console.error("Verify error:", error);
-    const traceId = resolveTraceId(req, req.body?.paymentPayload as PaymentPayload | undefined);
-    if (traceId) {
-      void emitMonitorEvent({
-        traceId,
-        step: "x402.facilitator.verify.succeeded",
-        status: "fail",
-        errorReason: error instanceof Error ? error.message : "Unknown error",
-      });
-    }
     res.status(500).json({
       error: error instanceof Error ? error.message : "Unknown error",
     });
@@ -634,19 +516,6 @@ app.post("/settle", async (req, res) => {
 
     const typedPayload = paymentPayload as PaymentPayload;
     const typedRequirements = paymentRequirements as PaymentRequirements;
-    const traceId = resolveTraceId(req, typedPayload);
-    if (traceId) {
-      void emitMonitorEvent({
-        traceId,
-        step: "x402.facilitator.settle.requested",
-        status: "started",
-        network: typedRequirements.network,
-        scheme: typedRequirements.scheme,
-        asset: typedRequirements.asset,
-        amount: typedRequirements.amount,
-        payTo: typedRequirements.payTo,
-      });
-    }
 
     // Hook 会自动执行：
     // - settle 前 verify 状态校验（未校验则中止）
@@ -661,28 +530,9 @@ app.post("/settle", async (req, res) => {
       typedRequirements,
     );
 
-    if (traceId) {
-      void emitMonitorEvent({
-        traceId,
-        step: "x402.facilitator.settle.succeeded",
-        status: response.success ? "success" : "fail",
-        txHash: response.success ? response.transaction : undefined,
-        errorReason: response.success ? undefined : response.errorReason,
-      });
-    }
-
     res.json(response);
   } catch (error) {
     console.error("Settle error:", error);
-    const traceId = resolveTraceId(req, req.body?.paymentPayload as PaymentPayload | undefined);
-    if (traceId) {
-      void emitMonitorEvent({
-        traceId,
-        step: "x402.facilitator.settle.succeeded",
-        status: "fail",
-        errorReason: error instanceof Error ? error.message : "Unknown error",
-      });
-    }
 
     // 若异常来自 hook 主动中止，则返回结构化 SettleResponse（而不是 500）
     // If aborted by hook, return structured SettleResponse instead of HTTP 500.

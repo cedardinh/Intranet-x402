@@ -1,5 +1,5 @@
 import { config } from "dotenv";
-import express, { Request } from "express";
+import express from "express";
 import { paymentMiddleware, x402ResourceServer } from "@x402/express";
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { HTTPFacilitatorClient } from "@x402/core/server";
@@ -27,7 +27,6 @@ const evmAsset = process.env.EVM_PRICE_ASSET as `0x${string}`;
 const evmAmount = process.env.EVM_PRICE_AMOUNT || "1000";
 const evmAssetName = process.env.EVM_ASSET_NAME || "USDC";
 const evmAssetVersion = process.env.EVM_ASSET_VERSION || "2";
-const monitorUrl = process.env.MONITOR_URL;
 
 if (!evmAddress || !evmAsset) {
   console.error("❌ EVM_ADDRESS and EVM_PRICE_ASSET environment variables are required");
@@ -37,91 +36,6 @@ if (!evmAddress || !evmAsset) {
 const facilitatorClient = new HTTPFacilitatorClient({ url: facilitatorUrl });
 
 const app = express();
-
-/**
- * 上报监控事件到本地 monitor 服务。
- * Sends monitoring events to the local monitor service.
- *
- * @param event - 事件内容（会自动补 component=resource-server）
- * @returns Promise<void>；失败不影响主请求
- */
-async function emitMonitorEvent(event: Record<string, unknown>): Promise<void> {
-  if (!monitorUrl) {
-    return;
-  }
-  try {
-    await fetch(`${monitorUrl.replace(/\/$/, "")}/events`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        component: "resource-server",
-        ...event,
-      }),
-    });
-  } catch {
-    // 监控失败不应阻断支付链路。
-    // Monitoring is best-effort and must not block payment execution.
-  }
-}
-
-/**
- * 提取 traceId（优先 header，其次 query）。
- * traceId 用于跨组件串联一次完整调用。
- * Extracts traceId (header first, then query) to correlate cross-component calls.
- *
- * @param req - Express 请求对象
- * @returns traceId 字符串；若不存在返回 undefined
- */
-function getTraceId(req: Request): string | undefined {
-  const fromHeader = req.header("x-trace-id");
-  if (typeof fromHeader === "string" && fromHeader.length > 0) {
-    return fromHeader;
-  }
-  const fromQuery = req.query.traceId;
-  if (typeof fromQuery === "string" && fromQuery.length > 0) {
-    return fromQuery;
-  }
-  return undefined;
-}
-
-/**
- * 判断请求是否携带支付签名。
- * 兼容 x402 标准头与历史兼容头。
- * Checks whether request carries a payment signature (standard + legacy headers).
- *
- * @param req - Express 请求对象
- * @returns true 表示当前请求包含支付签名头
- */
-function hasPaymentSignature(req: Request): boolean {
-  // x402 客户端可能使用标准或兼容头名。
-  // x402 clients may send either standard or compatibility header names.
-  return Boolean(req.header("payment-signature") || req.header("x-payment"));
-}
-
-/**
- * 观测中间件（埋点专用）：
- * - 仅在 GET /weather 且请求携带支付签名时记录事件。
- * - 不参与鉴权、不改变响应，next() 后继续由 paymentMiddleware 决策。
- *
- * Observation middleware (telemetry only):
- * - Emits events only for GET /weather requests carrying payment signatures.
- * - Does not authorize or mutate responses; decision is still made by paymentMiddleware.
- */
-app.use((req, res, next) => {
-  if (req.method === "GET" && req.path === "/weather" && hasPaymentSignature(req)) {
-    const traceId = getTraceId(req);
-    if (traceId) {
-      void emitMonitorEvent({
-        traceId,
-        step: "x402.server.payment_signature.received",
-        status: "success",
-        network: evmNetwork,
-        scheme: "exact",
-      });
-    }
-  }
-  next();
-});
 
 /**
  * x402 支付中间件：
@@ -182,15 +96,6 @@ app.get("/weather", (req, res) => {
   // Keep business logic isolated from payment protocol details.
   const city =
     typeof req.query.city === "string" && req.query.city.length > 0 ? req.query.city : "Guangzhou";
-  const traceId = getTraceId(req);
-  if (traceId) {
-    void emitMonitorEvent({
-      traceId,
-      step: "x402.resource.execution.succeeded",
-      status: "success",
-      metadata: { city },
-    });
-  }
   res.send({
     report: {
       city,

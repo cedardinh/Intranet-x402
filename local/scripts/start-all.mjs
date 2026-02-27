@@ -4,9 +4,8 @@
  *
  * Runtime topology started by this script:
  * 1) anvil (local chain)
- * 2) monitor (event sink + dashboard backend)
- * 3) facilitator (verify/settle APIs)
- * 4) resource server (paywalled /weather endpoint)
+ * 2) facilitator (verify/settle APIs)
+ * 3) resource server (paywalled /weather endpoint)
  *
  * Important runtime artifacts written to `local/runtime-logs/`:
  * - *.pid / *.log: process lifecycle + logs
@@ -39,7 +38,6 @@ const config = {
   chainId: "84532",
   ports: {
     anvil: 8545,
-    monitor: 4399,
     facilitator: 4022,
     express: 4021,
   },
@@ -171,7 +169,7 @@ function parsePidFile(filePath) {
 async function cleanupOldProcesses() {
   // Best-effort cleanup by reading both persisted state and pid files so repeated demo runs
   // are idempotent.
-  const serviceNames = ["anvil", "monitor", "facilitator", "express"];
+  const serviceNames = ["anvil", "facilitator", "express"];
   const state = readJsonFile(statePath);
   const pids = new Map();
 
@@ -448,22 +446,6 @@ async function main() {
   writeFileSync(path.join(runtimeDir, "facilitator.address"), facilitatorAddress, "utf8");
   writeFileSync(path.join(runtimeDir, "payee.address"), payeeAddress, "utf8");
 
-  // Start passive observer first so all downstream services can publish events from step 1.
-  log("Starting monitor service...");
-  const monitor = startDetachedService(
-    "monitor",
-    "node",
-    [path.join(localDir, "monitor", "server.mjs")],
-  );
-  const monitorReady = await waitForHttpStatus(
-    `http://${config.host}:${config.ports.monitor}`,
-    status => status >= 200 && status < 500,
-    12000,
-  );
-  if (monitorReady === null) {
-    throw new Error(`monitor did not start. See ${monitor.logPath}`);
-  }
-
   log("Starting facilitator...");
   // Facilitator is the protocol execution engine for /verify and /settle.
   const facilitator = startDetachedService(
@@ -476,7 +458,6 @@ async function main() {
         EVM_PRIVATE_KEY: config.facilitatorPrivateKey,
         EVM_NETWORK: `eip155:${config.chainId}`,
         EVM_RPC_URL: `http://${config.host}:${config.ports.anvil}`,
-        MONITOR_URL: `http://${config.host}:${config.ports.monitor}`,
       },
     },
   );
@@ -509,7 +490,6 @@ async function main() {
         EVM_PRICE_AMOUNT: "1000",
         EVM_ASSET_NAME: "USDC",
         EVM_ASSET_VERSION: "2",
-        MONITOR_URL: `http://${config.host}:${config.ports.monitor}`,
       },
     },
   );
@@ -534,7 +514,6 @@ async function main() {
     },
     services: {
       anvil,
-      monitor,
       facilitator,
       express: expressService,
     },
@@ -543,7 +522,6 @@ async function main() {
 
   log("All services are up.");
   console.log("");
-  console.log(`Monitor:      http://${config.host}:${config.ports.monitor}`);
   console.log(`Facilitator:  http://${config.host}:${config.ports.facilitator}`);
   console.log(`Resource API: http://${config.host}:${config.ports.express}/weather?city=Guangzhou`);
   console.log(`Local USDC:   ${tokenAddress}`);

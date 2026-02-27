@@ -14,7 +14,7 @@ const runtimeDir = path.join(localDir, "runtime-logs");
 const statePath = path.join(runtimeDir, "services.state.json");
 const isWindows = process.platform === "win32";
 
-const serviceOrder = ["express", "facilitator", "monitor", "anvil"];
+const serviceOrder = ["express", "facilitator", "anvil"];
 
 function log(message) {
   console.log(`[stop-all] ${message}`);

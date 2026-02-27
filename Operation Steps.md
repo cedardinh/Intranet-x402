@@ -77,7 +77,7 @@ Formatting style:
 
 ### On-chain verification of successful transaction
 
-TX='0x38c9c7204b6e185a59656aac1b23a0887b9c48fc2b2d7fbc7f6ed10407753969'
+TX='0xf9285056f1b29902222ce5df4212617ed3ec20572f6d83a8fcbfd34f2cd48c94'
 RPC='http://127.0.0.1:8545'
 USDC_DECIMALS=6
 TRANSFER_TOPIC='0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'

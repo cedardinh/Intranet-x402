@@ -28,7 +28,6 @@ config();
 const privateKey = process.env.PRIVATE_KEY as `0x${string}`;
 const baseURL = process.env.RESOURCE_SERVER_URL as string; // 资源服务地址（例如 http://127.0.0.1:4021）/ Resource server URL.
 const endpointPath = process.env.ENDPOINT_PATH as string; // 资源路径（例如 /weather）/ Protected endpoint path.
-const monitorUrl = process.env.MONITOR_URL;
 
 if (!privateKey || !baseURL || !endpointPath) {
   throw new Error("Missing environment variables");
@@ -51,42 +50,6 @@ const EVM_CHAIN_NAME_BY_ID: Record<string, string> = {
   "84532": "Local Anvil",
   "11155111": "Ethereum Sepolia",
 };
-
-/**
- * 向本地监控服务发送事件。
- * Sends an event to the local monitor service.
- *
- * 参数说明（中文）：
- * - event: 事件对象（会补充 component=mcp-bridge）
- * 返回值（中文）：
- * - Promise<void>；监控失败不会抛错，不影响主支付流程
- *
- * Parameters (English):
- * - event: event payload (component=mcp-bridge is appended)
- * Returns (English):
- * - Promise<void>; monitor failures are swallowed and never break the payment flow
- * @param event 事件对象（会补充 component=mcp-bridge）
- * @returns Promise<void>；监控失败不会抛错，不影响主支付流程
- */
-async function emitMonitorEvent(event: Record<string, unknown>): Promise<void> {
-  if (!monitorUrl) {
-    return;
-  }
-
-  try {
-    await fetch(`${monitorUrl.replace(/\/$/, "")}/events`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        component: "mcp-bridge",
-        ...event,
-      }),
-    });
-  } catch {
-    // 监控仅用于可观测性，失败时吞掉异常，避免影响支付主流程。
-    // Monitoring is best-effort only; failures are swallowed intentionally.
-  }
-}
 
 /**
  * 统一 MCP 工具输出结构。
@@ -188,7 +151,6 @@ const getDataFromResourceServerHandler = async (args: { city?: string }) => {
     // 一个 traceId 对应一次端到端支付请求；所有组件都用它串联日志。
     // A single traceId represents one end-to-end paid request across all components.
     const traceId = crypto.randomUUID();
-    const startedAt = Date.now();
     const city = typeof args?.city === "string" && args.city.length > 0 ? args.city : undefined;
     const queryPathBase = city
       ? `${endpointPath}${endpointPath.includes("?") ? "&" : "?"}city=${encodeURIComponent(city)}`
@@ -196,35 +158,9 @@ const getDataFromResourceServerHandler = async (args: { city?: string }) => {
     const queryPath = `${queryPathBase}${queryPathBase.includes("?") ? "&" : "?"}traceId=${encodeURIComponent(traceId)}`;
     const traceHeaders = { "x-trace-id": traceId };
 
-    void emitMonitorEvent({
-      traceId,
-      step: "chat.user_message.received",
-      status: "info",
-      metadata: { args },
-    });
-    void emitMonitorEvent({ traceId, step: "assistant.intent.resolved", status: "success" });
-    void emitMonitorEvent({
-      traceId,
-      step: "assistant.tool_call.planned",
-      status: "success",
-      toolName: "get-data-from-resource-server",
-    });
-    void emitMonitorEvent({
-      traceId,
-      step: "mcp.tool_call.started",
-      status: "started",
-      toolName: "get-data-from-resource-server",
-    });
-
     try {
       // 步骤 A：首次请求（不带支付签名），预期命中 paywall 并返回 402。
       // Step A: first request without payment signature; expect paywall 402.
-      void emitMonitorEvent({
-        traceId,
-        step: "x402.http.initial_request.sent",
-        status: "started",
-        toolName: "get-data-from-resource-server",
-      });
       const initialResponse = await client.get(queryPath, {
         headers: traceHeaders,
         validateStatus: () => true,
@@ -235,22 +171,6 @@ const getDataFromResourceServerHandler = async (args: { city?: string }) => {
         // Non-402 fallback: if server allows direct access, keep response contract consistent.
         if (initialResponse.status >= 200 && initialResponse.status < 300) {
           const payload = buildToolResponsePayload(initialResponse.data, { traceId });
-          void emitMonitorEvent({
-            traceId,
-            step: "mcp.tool_call.completed",
-            status: "success",
-            durationMs: Date.now() - startedAt,
-          });
-          void emitMonitorEvent({
-            traceId,
-            step: "assistant.explanation.generated",
-            status: "success",
-          });
-          void emitMonitorEvent({
-            traceId,
-            step: "chat.assistant_message.sent",
-            status: "success",
-          });
           return {
             content: [{ type: "text", text: JSON.stringify(payload) }],
           };
@@ -258,12 +178,6 @@ const getDataFromResourceServerHandler = async (args: { city?: string }) => {
 
         throw new Error(`Unexpected status code from resource server: ${initialResponse.status}`);
       }
-
-      void emitMonitorEvent({
-        traceId,
-        step: "x402.http.402_received",
-        status: "success",
-      });
 
       // 步骤 B：解析 PAYMENT-REQUIRED（头 + body），拿到结构化支付要求。
       // Step B: decode PAYMENT-REQUIRED from headers/body into structured requirements.
@@ -276,41 +190,13 @@ const getDataFromResourceServerHandler = async (args: { city?: string }) => {
         initialResponse.data,
       );
 
-      void emitMonitorEvent({
-        traceId,
-        step: "x402.payment_required.decoded",
-        status: "success",
-      });
-
       // 步骤 C：选择 accepted requirement，并使用 buyer 私钥生成支付载荷。
       // accepted 表示“本次请求承诺支付的具体网络/资产/金额/收款方”。
       // Step C: choose accepted requirement and create signed payment payload.
       // `accepted` is the concrete promise: network/asset/amount/payee for this request.
       const paymentPayload = await paymentClient.createPaymentPayload(paymentRequired);
-      const accepted = paymentPayload.accepted;
-
-      void emitMonitorEvent({
-        traceId,
-        step: "x402.payment_requirement.selected",
-        status: "success",
-        network: accepted.network,
-        scheme: accepted.scheme,
-        asset: accepted.asset,
-        amount: accepted.amount,
-        payTo: accepted.payTo,
-      });
-      void emitMonitorEvent({
-        traceId,
-        step: "x402.payment_payload.created",
-        status: "success",
-      });
 
       const paymentHeaders = httpClient.encodePaymentSignatureHeader(paymentPayload);
-      void emitMonitorEvent({
-        traceId,
-        step: "x402.http.retry_with_payment_signature.sent",
-        status: "started",
-      });
 
       // 步骤 D：携带 PAYMENT-SIGNATURE 重试；服务端据此触发 verify + settle。
       // Step D: retry with PAYMENT-SIGNATURE; server then runs verify + settle.
@@ -328,12 +214,6 @@ const getDataFromResourceServerHandler = async (args: { city?: string }) => {
         throw new Error(`Payment retry failed with status ${paidResponse.status}`);
       }
 
-      void emitMonitorEvent({
-        traceId,
-        step: "x402.http.200_with_payment_response.received",
-        status: "success",
-      });
-
       // 步骤 E：解析 PAYMENT-RESPONSE，提取 txHash/network 回传上层。
       // Step E: decode PAYMENT-RESPONSE and return txHash/network to upper layers.
       const encodedPaymentResponse =
@@ -345,31 +225,7 @@ const getDataFromResourceServerHandler = async (args: { city?: string }) => {
         const settlement = decodePaymentResponseHeader(encodedPaymentResponse);
         settlementTxHash = settlement.transaction;
         settlementNetwork = settlement.network;
-        void emitMonitorEvent({
-          traceId,
-          step: "x402.payment_response.decoded",
-          status: "success",
-          txHash: settlementTxHash,
-          network: settlementNetwork,
-        });
       }
-
-      void emitMonitorEvent({
-        traceId,
-        step: "mcp.tool_call.completed",
-        status: "success",
-        durationMs: Date.now() - startedAt,
-      });
-      void emitMonitorEvent({
-        traceId,
-        step: "assistant.explanation.generated",
-        status: "success",
-      });
-      void emitMonitorEvent({
-        traceId,
-        step: "chat.assistant_message.sent",
-        status: "success",
-      });
 
       const payload = buildToolResponsePayload(paidResponse.data, {
         traceId,
@@ -381,16 +237,8 @@ const getDataFromResourceServerHandler = async (args: { city?: string }) => {
         content: [{ type: "text", text: JSON.stringify(payload) }],
       };
     } catch (error) {
-      // 保留原始异常语义，同时发送结构化失败事件，便于流程排障。
-      // Preserve original error semantics while emitting structured failure events.
-      const message = error instanceof Error ? error.message : "unknown error";
-      void emitMonitorEvent({
-        traceId,
-        step: "mcp.tool_call.completed",
-        status: "fail",
-        errorReason: message,
-        durationMs: Date.now() - startedAt,
-      });
+      // 保留原始异常语义，直接上抛给调用方。
+      // Preserve original error semantics and rethrow to caller.
       throw error;
     }
 };
