@@ -1,0 +1,980 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>x402 Monitor</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0e1118;
+        --panel: #ffffff;
+        --text: #eef3ff;
+        --muted: #93a0be;
+        --line: #2a3142;
+        --accent: #17a7ff;
+        --ok: #17b26a;
+        --fail: #e5484d;
+        --info: #6e87ff;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "IBM Plex Sans", "Noto Sans SC", sans-serif;
+        color: var(--text);
+        background:
+          radial-gradient(circle at 10% 0%, #13213c 0, transparent 28%),
+          radial-gradient(circle at 90% 100%, #1f2134 0, transparent 35%),
+          var(--bg);
+      }
+
+      .wrap {
+        width: 100%;
+        max-width: none;
+        margin: 0;
+        padding: clamp(12px, 1.8vw, 24px);
+      }
+
+      .header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+
+      .title {
+        margin: 0;
+        font-size: 24px;
+      }
+
+      .meta {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .badge {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 4px 10px;
+        font-size: 12px;
+      }
+
+      .badge.live {
+        border-color: #2f6d52;
+      }
+
+      .history-open {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 4px 12px;
+        background: #15213d;
+        color: var(--text);
+        font-size: 12px;
+        cursor: pointer;
+      }
+
+      .grid {
+        display: grid;
+        gap: 12px;
+      }
+
+      .panel {
+        background: #121826cc;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 12px;
+        backdrop-filter: blur(4px);
+      }
+
+      .panel-title {
+        margin: 0 0 10px;
+        font-size: 14px;
+        color: var(--muted);
+      }
+
+      .hidden {
+        display: none;
+      }
+
+      .realtime-grid {
+        display: grid;
+        grid-template-columns: 1.15fr 0.85fr;
+        gap: 12px;
+      }
+
+      .realtime-grid > * {
+        min-width: 0;
+      }
+
+      .flow-box,
+      .live-box {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #0e1421;
+        padding: 10px;
+        min-width: 0;
+        overflow: hidden;
+      }
+
+      .flow-nodes {
+        display: grid;
+        gap: 10px;
+        max-height: 56vh;
+        overflow-y: auto;
+        overflow-x: hidden;
+        min-width: 0;
+      }
+
+      .flow-row {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: #0f1729;
+        padding: 10px;
+        overflow: hidden;
+        min-width: 0;
+      }
+
+      .flow-row-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 8px;
+        flex-wrap: wrap;
+      }
+
+      .flow-row-trace {
+        margin: 0;
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 12px;
+      }
+
+      .flow-row-meta {
+        margin: 4px 0 0;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .sequence-shell {
+        border: 1px solid #c6cad3;
+        border-radius: 12px;
+        background: #f0f2f6;
+        padding: 8px;
+        min-width: 0;
+      }
+
+      .sequence-scroll {
+        overflow: hidden;
+        max-width: 100%;
+        padding-bottom: 2px;
+      }
+
+      .sequence-svg {
+        display: block;
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+        height: auto;
+      }
+
+      .seq-actor-label {
+        fill: #121621;
+        font-size: 14px;
+        font-weight: 700;
+        font-family: "IBM Plex Sans", "Noto Sans SC", sans-serif;
+      }
+
+      .seq-note {
+        fill: #4d576d;
+        font-size: 9px;
+        font-family: "IBM Plex Mono", monospace;
+      }
+
+      .seq-lifeline {
+        stroke: #1f2937;
+        stroke-width: 2;
+        opacity: 0.94;
+      }
+
+      .seq-message-node {
+        color: #8d95a6;
+        cursor: pointer;
+        transition: color 120ms linear, filter 120ms linear, opacity 120ms linear;
+      }
+
+      .seq-hitbox {
+        fill: transparent;
+      }
+
+      .seq-message-line,
+      .seq-message-loop {
+        stroke: currentColor;
+        stroke-width: 3;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        fill: none;
+        transition: stroke 120ms linear, stroke-width 120ms linear, opacity 120ms linear;
+      }
+
+      .seq-message-arrow {
+        fill: currentColor;
+        transition: fill 120ms linear, opacity 120ms linear;
+      }
+
+      .seq-message-label {
+        fill: currentColor;
+        font-size: 11px;
+        font-weight: 700;
+        font-family: "IBM Plex Mono", monospace;
+        transition: fill 120ms linear, opacity 120ms linear;
+      }
+
+      .seq-message-meta {
+        fill: currentColor;
+        font-size: 9px;
+        opacity: 0.9;
+        font-family: "IBM Plex Mono", monospace;
+        transition: fill 120ms linear, opacity 120ms linear;
+      }
+
+      .seq-message-node.pending {
+        color: #8d95a6;
+      }
+
+      .seq-message-node.running {
+        color: #2563eb;
+        animation: seqLinePulse 1s ease-in-out infinite;
+      }
+
+      .seq-message-node.success {
+        color: #16a34a;
+      }
+
+      .seq-message-node.fail {
+        color: #dc2626;
+      }
+
+      .seq-message-node:hover {
+        filter: brightness(1.05);
+      }
+
+      .seq-message-node.selected {
+        filter: drop-shadow(0 0 8px #2563eb99);
+      }
+
+      .seq-message-node.just-updated {
+        animation: seqStepFlash 0.52s ease;
+      }
+
+      .seq-message-node.just-updated .seq-message-line,
+      .seq-message-node.just-updated .seq-message-loop {
+        stroke-width: 4;
+      }
+
+      @keyframes seqStepFlash {
+        0% {
+          opacity: 0.5;
+          filter: drop-shadow(0 0 0 transparent);
+        }
+        45% {
+          opacity: 1;
+          filter: drop-shadow(0 0 10px currentColor);
+        }
+        100% {
+          opacity: 1;
+          filter: drop-shadow(0 0 0 transparent);
+        }
+      }
+
+      @keyframes seqLinePulse {
+        0% {
+          opacity: 0.58;
+        }
+        50% {
+          opacity: 1;
+        }
+        100% {
+          opacity: 0.58;
+        }
+      }
+
+      .sequence-legend {
+        margin: 0 0 10px;
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .legend-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .legend-dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 999px;
+      }
+
+      .legend-dot.pending {
+        background: #4b5369;
+      }
+
+      .legend-dot.running {
+        background: #6e87ff;
+      }
+
+      .legend-dot.success {
+        background: #24b374;
+      }
+
+      .legend-dot.fail {
+        background: #e25662;
+      }
+
+      .flow-lane {
+        overflow-x: auto;
+        overflow-y: hidden;
+        padding-bottom: 4px;
+        max-width: 100%;
+        min-width: 0;
+      }
+
+      .flow-track {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: max-content;
+        min-width: max-content;
+      }
+
+      .step-node {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #192235;
+        color: var(--text);
+        width: 172px;
+        min-width: 172px;
+        max-width: 172px;
+        flex: 0 0 172px;
+        padding: 8px;
+        text-align: left;
+        cursor: pointer;
+        display: grid;
+        gap: 5px;
+        transition: transform 0.12s ease, border-color 0.12s ease;
+      }
+
+      .step-node:hover {
+        transform: translateY(-1px);
+        border-color: #4d73b8;
+      }
+
+      .step-node.current {
+        border-color: #4d73b8;
+        box-shadow: 0 0 0 1px #2f4e84 inset;
+      }
+
+      .step-node.selected {
+        border-color: #6e87ff;
+        box-shadow: 0 0 0 1px #6e87ff66 inset;
+      }
+
+      .step-node.pending {
+        background: #1a2236;
+        border-color: #46506a;
+      }
+
+      .step-node.running {
+        background: #17274d;
+        border-color: #6e87ff;
+      }
+
+      .step-node.success {
+        background: #143629;
+        border-color: #24b374;
+      }
+
+      .step-node.fail {
+        background: #3b1720;
+        border-color: #e25662;
+      }
+
+      .step-name {
+        margin: 0;
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 12px;
+        line-height: 1.25;
+      }
+
+      .step-state {
+        justify-self: start;
+        border-radius: 999px;
+        padding: 2px 8px;
+        font-size: 10px;
+        line-height: 1.2;
+      }
+
+      .step-state.pending {
+        background: #46506a;
+        color: #d9e1f7;
+      }
+
+      .step-state.running {
+        background: #6e87ff;
+        color: #f4f7ff;
+      }
+
+      .step-state.success {
+        background: #24b374;
+        color: #ebfff6;
+      }
+
+      .step-state.fail {
+        background: #e25662;
+        color: #fff3f5;
+      }
+
+      .step-meta {
+        margin: 0;
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      .step-link {
+        width: 28px;
+        min-width: 28px;
+        height: 2px;
+        border-radius: 999px;
+        background: #4b5369;
+      }
+
+      .step-link.pending {
+        background: #4b5369;
+      }
+
+      .step-link.running {
+        background: var(--info);
+        box-shadow: 0 0 10px #5c78ff88;
+        animation: linkPulse 1s ease-in-out infinite;
+      }
+
+      .step-link.success {
+        background: var(--ok);
+      }
+
+      .step-link.fail {
+        background: var(--fail);
+      }
+
+      @keyframes linkPulse {
+        0% {
+          box-shadow: 0 0 0 #5c78ff44;
+          opacity: 0.6;
+        }
+        50% {
+          box-shadow: 0 0 12px #5c78ffaa;
+          opacity: 1;
+        }
+        100% {
+          box-shadow: 0 0 0 #5c78ff44;
+          opacity: 0.6;
+        }
+      }
+
+      .stream-box {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #0c111b;
+        padding: 10px;
+      }
+
+      .stream-output {
+        margin: 0;
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 12px;
+        line-height: 1.45;
+        white-space: pre-wrap;
+        word-break: break-word;
+        max-height: 28vh;
+        overflow: auto;
+      }
+
+      .current-card {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #0c111b;
+        padding: 10px;
+        margin-bottom: 10px;
+      }
+
+      .label {
+        margin: 0 0 6px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .current-step {
+        margin: 0;
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 13px;
+      }
+
+      .current-detail {
+        margin: 6px 0 0;
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 12px;
+        color: var(--muted);
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .live-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 8px;
+        max-height: 36vh;
+        overflow: auto;
+      }
+
+      .live-item {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 8px;
+        background: #0f1421;
+      }
+
+      .row {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+
+      .mono {
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 12px;
+      }
+
+      .status {
+        border-radius: 999px;
+        padding: 2px 8px;
+        color: #fff;
+        font-size: 11px;
+      }
+
+      .status.success {
+        background: var(--ok);
+      }
+
+      .status.fail {
+        background: var(--fail);
+      }
+
+      .status.started {
+        background: var(--info);
+      }
+
+      .status.info {
+        background: #5b6378;
+      }
+
+      .history-wrap {
+        overflow-y: auto;
+        overflow-x: hidden;
+        max-height: 58vh;
+        min-width: 0;
+      }
+
+      .history-traces {
+        display: grid;
+        gap: 12px;
+        min-width: 0;
+      }
+
+      .history-card {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: #0f1627;
+        padding: 10px;
+        min-width: 0;
+        overflow: hidden;
+      }
+
+      .history-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+        margin-bottom: 8px;
+      }
+
+      .history-trace {
+        margin: 0;
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 12px;
+      }
+
+      .history-meta {
+        margin: 4px 0 0;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .history-status {
+        border-radius: 999px;
+        padding: 3px 9px;
+        font-size: 11px;
+        color: #fff;
+      }
+
+      .history-status.success {
+        background: var(--ok);
+      }
+
+      .history-status.fail {
+        background: var(--fail);
+      }
+
+      .history-status.running {
+        background: var(--info);
+      }
+
+      .history-status.pending {
+        background: #4b5369;
+      }
+
+      .muted {
+        color: var(--muted);
+      }
+
+      .node-drawer {
+        margin-top: 10px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #0c1323;
+        overflow: hidden;
+        animation: drawerIn 0.18s ease;
+      }
+
+      .node-drawer-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 10px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .node-drawer-title {
+        margin: 0;
+        font-size: 13px;
+      }
+
+      .drawer-close {
+        border: 1px solid var(--line);
+        background: #121d35;
+        color: var(--text);
+        border-radius: 8px;
+        padding: 4px 10px;
+        cursor: pointer;
+      }
+
+      .node-drawer-body {
+        margin: 0;
+        padding: 10px;
+        overflow: auto;
+        max-height: 220px;
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 12px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .history-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 1200;
+        background: #020612c9;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 18px;
+      }
+
+      .history-modal.hidden {
+        display: none;
+      }
+
+      .history-dialog {
+        width: min(1180px, 96vw);
+        max-height: 90vh;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: #0f1628;
+        display: grid;
+        grid-template-rows: auto 1fr;
+        overflow: hidden;
+      }
+
+      .history-dialog-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .history-dialog-title {
+        margin: 0;
+        font-size: 14px;
+      }
+
+      .history-close {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #1a2542;
+        color: var(--text);
+        cursor: pointer;
+        padding: 4px 10px;
+      }
+
+      .history-dialog-body {
+        display: grid;
+        grid-template-columns: 0.95fr 1.05fr;
+        min-height: 0;
+      }
+
+      .history-list-wrap {
+        border-right: 1px solid var(--line);
+        min-height: 0;
+        overflow: auto;
+      }
+
+      .history-list {
+        list-style: none;
+        margin: 0;
+        padding: 8px;
+        display: grid;
+        gap: 8px;
+      }
+
+      .history-row {
+        width: 100%;
+        text-align: left;
+        border: 1px solid #33405f;
+        border-radius: 10px;
+        padding: 8px 10px;
+        background: #111b31;
+        color: var(--text);
+        cursor: pointer;
+        display: grid;
+        gap: 5px;
+      }
+
+      .history-row:hover {
+        border-color: #4f6aa4;
+      }
+
+      .history-row.selected {
+        border-color: #6e87ff;
+        box-shadow: 0 0 0 1px #6e87ff55 inset;
+      }
+
+      .history-row-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .history-row-trace {
+        margin: 0;
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 12px;
+      }
+
+      .history-row-meta {
+        margin: 0;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .history-detail-wrap {
+        min-height: 0;
+        overflow: auto;
+        padding: 10px;
+        display: grid;
+        grid-template-rows: auto auto 1fr;
+        gap: 8px;
+      }
+
+      .history-detail-title {
+        margin: 0;
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 12px;
+      }
+
+      .history-steps {
+        display: grid;
+        gap: 6px;
+      }
+
+      .history-step {
+        border: 1px solid #33405f;
+        border-radius: 8px;
+        background: #111b31;
+        color: var(--text);
+        padding: 6px 8px;
+        width: 100%;
+        cursor: pointer;
+        text-align: left;
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        align-items: center;
+      }
+
+      .history-step.selected {
+        border-color: #6e87ff;
+        box-shadow: 0 0 0 1px #6e87ff55 inset;
+      }
+
+      .history-step-left {
+        display: grid;
+        gap: 3px;
+        min-width: 0;
+      }
+
+      .history-step-name {
+        margin: 0;
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 11px;
+      }
+
+      .history-step-meta {
+        margin: 0;
+        color: var(--muted);
+        font-size: 10px;
+      }
+
+      .history-step-detail {
+        margin: 0;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #0c1323;
+        padding: 10px;
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 11px;
+        white-space: pre-wrap;
+        word-break: break-word;
+        overflow: auto;
+        min-height: 220px;
+      }
+
+      @keyframes drawerIn {
+        from {
+          opacity: 0;
+          transform: translateY(-6px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      @media (max-width: 980px) {
+        .realtime-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .history-dialog-body {
+          grid-template-columns: 1fr;
+          grid-template-rows: 42vh 1fr;
+        }
+
+        .history-list-wrap {
+          border-right: none;
+          border-bottom: 1px solid var(--line);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="header">
+        <h1 class="title">x402 实时监控</h1>
+        <div class="meta">
+          <span class="badge live">SSE: <span id="sse-state">-</span></span>
+          <span class="badge">输出: <span id="stream-state">IDLE</span></span>
+          <span class="badge">事件总数: <span id="total-count">0</span></span>
+          <span class="badge">事件速率: <span id="event-rate">0/s</span></span>
+          <span class="badge">运行 Trace: <span id="active-trace">-</span></span>
+          <button id="history-open" type="button" class="history-open">历史记录</button>
+        </div>
+      </header>
+
+      <section id="realtime-section" class="panel hidden" style="margin-bottom: 12px">
+        <h2 class="panel-title">实时 x402 时序图（运行中）</h2>
+        <p class="sequence-legend">
+          <span class="legend-item"><span class="legend-dot pending"></span>未执行</span>
+          <span class="legend-item"><span class="legend-dot running"></span>执行中</span>
+          <span class="legend-item"><span class="legend-dot success"></span>成功</span>
+          <span class="legend-item"><span class="legend-dot fail"></span>失败</span>
+        </p>
+        <div class="realtime-grid">
+          <div class="flow-box">
+            <div id="flow-nodes" class="flow-nodes"></div>
+          </div>
+          <div class="live-box">
+            <div class="current-card">
+              <p class="label">当前节点</p>
+              <p id="current-step" class="current-step">-</p>
+              <p id="current-detail" class="current-detail">-</p>
+            </div>
+            <div class="stream-box">
+              <p class="label">实况窗（逐字输出）</p>
+              <pre id="stream-output" class="stream-output"></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </div>
+
+    <div id="history-modal" class="history-modal hidden">
+      <div class="history-dialog">
+        <div class="history-dialog-head">
+          <h3 class="history-dialog-title">历史请求记录</h3>
+          <button id="history-close" type="button" class="history-close">关闭</button>
+        </div>
+        <div class="history-dialog-body">
+          <div class="history-list-wrap">
+            <ul id="history-list" class="history-list"></ul>
+          </div>
+          <div class="history-detail-wrap">
+            <p id="history-detail-title" class="history-detail-title">请选择一个历史请求</p>
+            <div id="history-steps" class="history-steps"></div>
+            <pre id="history-step-detail" class="history-step-detail">-</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
