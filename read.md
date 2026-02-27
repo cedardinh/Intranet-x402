@@ -9,13 +9,11 @@
 | 模块 | 路径 | 职责 |
 |---|---|---|
 | MCP 配置 | `.vscode/mcp.json` | 在 VSCode 中注册 `x402-official-bridge`，把 MCP 调用转发到本地 x402 MCP Bridge。 |
-| 一键启动脚本 | `local/scripts/start-all.mjs` / `stop-all.mjs` | 启停本地链路：anvil、monitor、facilitator、resource server；并自动部署/铸造测试代币。 |
+| 一键启动脚本 | `local/scripts/start-all.mjs` / `stop-all.mjs` | 启停本地链路：anvil、facilitator、resource server；并自动部署/铸造测试代币。 |
 | 本地测试代币 | `local/evm/src/LocalUSDC.sol` | 提供 EIP-3009 能力的本地 USDC 合约，用于支付签名与结算演示。 |
 | MCP Bridge（官方复用） | `official-x402/examples/typescript/legacy/mcp/index.ts` | 暴露工具 `get-data-from-resource-server`，处理 402、签名支付、重试请求、解析 payment response。 |
 | 资源服务（官方复用） | `official-x402/examples/typescript/servers/express/index.ts` | 对 `/weather` 开启 x402 paywall，收到签名后执行业务并返回 200。 |
 | Facilitator（官方复用+适配） | `official-x402/e2e/facilitators/typescript/index.ts` | 负责 `verify/settle`，提交链上交易并返回结算结果；已支持自定义 `eip155:<chainId>` 链。 |
-| 监控后端 | `local/monitor/server.mjs` | 接收/存储事件（`/events`）、SSE 推送（`/events/stream`）。 |
-| 监控前端 | `local/monitor/public/index.html` / `app.js` | 实时流程图可视化、节点状态染色、节点详情查看、历史请求回放。 |
 
 ## 运行拓扑（当前代码）
 
@@ -30,7 +28,6 @@
 9. Facilitator 向链上提交交易并确认。  
 10. Resource Server 返回 `200 + PAYMENT-RESPONSE + content`。  
 11. MCP Bridge 解码结算信息并返回给 MCP 客户端。  
-12. Monitor 全程记录事件并实时展示流程状态。
 
 ## 返回数据约定（已改造）
 
@@ -66,7 +63,7 @@
 ## 与 x402 流程的一致性
 项目严格遵循 x402 的核心事务顺序：  
 `Initial Request -> 402 -> Payment Payload -> Retry With Signature -> Verify -> Business Work -> Settle -> 200 Response`。  
-监控事件命名与页面流程节点已按该顺序映射，能够直观看到“未执行 / 执行中 / 成功 / 失败”的状态迁移。
+每一步均可通过 HTTP 响应与链上交易回执验证，保证演示闭环可复现、可核对。
 
 ## Besu 适配现状
 - 已完成：Facilitator 支持自定义 `eip155:<chainId>` 网络，可用于 Besu 私链。  

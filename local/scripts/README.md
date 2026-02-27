@@ -24,7 +24,6 @@ node local/scripts/stop-all.mjs
 2. Reads MCP buyer private key from `.vscode/mcp.json` (`x402-official-bridge`).
 3. Starts local chain (`anvil`, `127.0.0.1:8545`).
 4. Deploys `LocalUSDC` and mints tokens to MCP buyer wallet.
-5. Starts monitor (`127.0.0.1:4399`).
-6. Starts facilitator (`127.0.0.1:4022`).
-7. Starts resource server (`127.0.0.1:4021`).
-8. Performs health checks (including `/weather` returning `402`).
+5. Starts facilitator (`127.0.0.1:4022`).
+6. Starts resource server (`127.0.0.1:4021`).
+7. Performs health checks (including `/weather` returning `402`).

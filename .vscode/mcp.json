@@ -12,8 +12,7 @@
             "env": {
                 "PRIVATE_KEY": "0x7a9749e5ce0c270da4e89c5d0ec643909ba3cca7946447b4f6041f55342803ba",
                 "RESOURCE_SERVER_URL": "http://127.0.0.1:4021",
-                "ENDPOINT_PATH": "/weather",
-                "MONITOR_URL": "http://127.0.0.1:4399"
+                "ENDPOINT_PATH": "/weather"
             }
         }
     }

@@ -16,7 +16,7 @@ BUYER_ADDRESS=$BUYER_ADDRESS bash local/evm/deploy_local_usdc.sh | tee local/run
 ### Start facilitator
 
 ```bash
-PORT=4022 EVM_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 EVM_NETWORK=eip155:84532 EVM_RPC_URL=http://127.0.0.1:8545 MONITOR_URL=http://127.0.0.1:4399 pnpm --dir official-x402/e2e/facilitators/typescript start
+PORT=4022 EVM_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 EVM_NETWORK=eip155:84532 EVM_RPC_URL=http://127.0.0.1:8545 pnpm --dir official-x402/e2e/facilitators/typescript start
 ```
 
 ### Start resource server
@@ -24,7 +24,7 @@ PORT=4022 EVM_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae78
 ```bash
 TOKEN=$(cat local/runtime-logs/local_usdc.address)
 PAYEE_ADDR=$(cast wallet address --private-key 0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d)
-FACILITATOR_URL=http://127.0.0.1:4022 EVM_ADDRESS=$PAYEE_ADDR EVM_NETWORK=eip155:84532 EVM_PRICE_ASSET=$TOKEN EVM_PRICE_AMOUNT=1000 EVM_ASSET_NAME=USDC EVM_ASSET_VERSION=2 MONITOR_URL=http://127.0.0.1:4399 pnpm --dir official-x402/examples/typescript/servers/express dev
+FACILITATOR_URL=http://127.0.0.1:4022 EVM_ADDRESS=$PAYEE_ADDR EVM_NETWORK=eip155:84532 EVM_PRICE_ASSET=$TOKEN EVM_PRICE_AMOUNT=1000 EVM_ASSET_NAME=USDC EVM_ASSET_VERSION=2 pnpm --dir official-x402/examples/typescript/servers/express dev
 ```
 ### Configure mcp.json
 
@@ -43,8 +43,7 @@ FACILITATOR_URL=http://127.0.0.1:4022 EVM_ADDRESS=$PAYEE_ADDR EVM_NETWORK=eip155
       "env": {
         "PRIVATE_KEY": "0x7a9749e5ce0c270da4e89c5d0ec643909ba3cca7946447b4f6041f55342803ba",
         "RESOURCE_SERVER_URL": "http://127.0.0.1:4021",
-        "ENDPOINT_PATH": "/weather",
-        "MONITOR_URL": "http://127.0.0.1:4399"
+        "ENDPOINT_PATH": "/weather"
       }
     }
   }
@@ -77,7 +76,7 @@ Formatting style:
 
 ### On-chain verification of successful transaction
 
-TX='0xf9285056f1b29902222ce5df4212617ed3ec20572f6d83a8fcbfd34f2cd48c94'
+TX='0x34b460fcf7870c25fe37762a4013782b7c5c7e85ce6d739c24bd63bf7cd211b9'
 RPC='http://127.0.0.1:8545'
 USDC_DECIMALS=6
 TRANSFER_TOPIC='0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
