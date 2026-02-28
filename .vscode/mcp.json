@@ -1,19 +1,19 @@
 {
-    "servers": {
-        "x402-official-bridge": {
-            "type": "stdio",
-            "command": "pnpm",
-            "args": [
-                "--silent",
-                "-C",
-                "/Users/dinglujie/Desktop/Intranet-x402/official-x402/examples/typescript/legacy/mcp",
-                "dev"
-            ],
-            "env": {
-                "PRIVATE_KEY": "0x7a9749e5ce0c270da4e89c5d0ec643909ba3cca7946447b4f6041f55342803ba",
-                "RESOURCE_SERVER_URL": "http://127.0.0.1:4021",
-                "ENDPOINT_PATH": "/weather"
-            }
-        }
+  "servers": {
+    "x402-official-bridge": {
+      "type": "stdio",
+      "command": "pnpm",
+      "args": [
+        "--silent",
+        "-C",
+        "/Users/dinglujie/Desktop/Intranet-x402/x402-workspace/components/mcp-bridge",
+        "dev"
+      ],
+      "env": {
+        "PRIVATE_KEY": "0x7a9749e5ce0c270da4e89c5d0ec643909ba3cca7946447b4f6041f55342803ba",
+        "RESOURCE_SERVER_URL": "http://127.0.0.1:4021",
+        "ENDPOINT_PATH": "/weather"
+      }
     }
+  }
 }

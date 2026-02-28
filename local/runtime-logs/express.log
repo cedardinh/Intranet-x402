@@ -1,6 +1,0 @@
-
-> @x402/express-server-example@ dev /Users/dinglujie/Desktop/Intranet-x402/official-x402/examples/typescript/servers/express
-> tsx index.ts
-
-Server listening at http://localhost:4021
- ELIFECYCLE  Command failed with exit code 143.
